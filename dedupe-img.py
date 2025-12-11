@@ -61,17 +61,23 @@ def scan(paths):
         sys.exit(0)
 
     write_dict(hashes)
+    
+    # Second pass, filter hashes to only those that begin with one of the paths we're scanning
+    # We could have loaded hashes from disk that are not for directories we're scanning
+    hashes = {file_path: h for file_path, h in hashes.items() if startswith(file_path, paths)}
+    num = len(hashes)
+    print(f"Filtered to {num} hashes")
 
-    # Second pass, generate hash => filenames dict
+    # Third pass, generate hash => filenames dict
     reverse_hashes = dict()
     
-    for h, file_path in hashes.items():
-        if h in duplicates:
+    for file_path, h in hashes.items():
+        if h in reverse_hashes:
             reverse_hashes[h].append(file_path)
         else:
             reverse_hashes[h] = [file_path]
 
-    # Third pass, print duplicates
+    # Fourth pass, print duplicates
     for h, duplicates in reverse_hashes.items():
         if len(duplicates) < 2:
             continue
@@ -79,9 +85,17 @@ def scan(paths):
         for duplicate in duplicates:
             print(duplicate)
 
+def startswith(file_path, paths):
+    for path in paths:
+        if file_path.startswith(path):
+            return True
+    return False
+
 def write_dict(hashes):
     with open(HASHES_FILENAME, 'wb') as file_handler:
         pickle.dump(hashes, file_handler)
+        num = len(hashes)
+        print(f"Wrote {num} hashes to disk")
 
 def read_dict():
     if not os.path.exists(HASHES_FILENAME):
@@ -92,7 +106,7 @@ def read_dict():
         with open(HASHES_FILENAME, 'rb') as file_handler:
             hashes = pickle.load(file_handler)
             num = len(hashes)
-            print(f"Loaded {num} hashes")
+            print(f"Loaded {num} hashes from disk")
             return hashes
     except Exception as e:
         print(f"Error {e} loading hashes from disk, starting from scratch...")
