@@ -6,7 +6,9 @@ import hashlib
 import sys
 import os
 
-EXTENSIONS = {".jpg", ".jpeg", ".heic"}
+IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".heic"}
+VIDEO_EXTENSIONS = {".mov"}
+EXTENSIONS = IMAGE_EXTENSIONS.union(VIDEO_EXTENSIONS)
 EXCLUDE_DIRECTORIES = {"@eaDir"}
 HASHES_FILENAME = "dedup-hashes.pkl"
 
@@ -45,16 +47,24 @@ def scan(paths):
 
                 for file_name in files:
                     _, ext = os.path.splitext(file_name)
-                    if ext.lower() in EXTENSIONS:
-                        file_path = os.path.join(root, file_name)
-                        if file_path not in hashes:
+                    if ext.lower() not in EXTENSIONS:
+                        continue
+                    file_path = os.path.join(root, file_name)
+                    if file_path not in hashes:
+                        if ext.lower() in IMAGE_EXTENSIONS:
                             try:
                                 h = hash_image(file_path)
                             except OSError as e:
                                 print(f"error hashing '{file_path}: {e}")
                                 continue
-                            hashes[file_path] = h
-                            print(f"hash for '{file_path}': {h}")
+                        if ext.lower() in VIDEO_EXTENSIONS:
+                            try:
+                                h = hash_mov(file_path)
+                            except OSError as e:
+                                print(f"error hashing '{file_path}: {e}")
+                                continue
+                        hashes[file_path] = h
+                        print(f"hash for '{file_path}': {h}")
     except KeyboardInterrupt:
         print("Script interrupted. Saving state to disk...")
         write_dict(hashes)
@@ -128,17 +138,50 @@ def hash_image(image_path):
         image_hash = hashlib.md5(pixel_data).hexdigest()
         return image_hash
 
+def hash_mov(filename):
+    """
+    Find and hash the 'mdat' atom.
+    This requires manual parsing of the QuickTime/MP4 file structure.
+    """
+    hash_func = hashlib.md5()
+
+    with open(filename, 'rb') as f:
+        while True:
+            header = f.read(8)
+            if not header:
+                break
+            size = int.from_bytes(header[:4], byteorder='big')
+            atom_type = header[4:].decode('ascii')
+
+            if atom_type == 'mdat':
+                # Found the 'mdat' atom (media data). Read and hash its content.
+                content_size = size - 8
+                chunk_size = 1024 * 1024 # Read in chunks to manage memory
+                while content_size > 0:
+                    read_size = min(content_size, chunk_size)
+                    chunk = f.read(read_size)
+                    if not chunk:
+                        break
+                    hash_func.update(chunk)
+                    content_size -= len(chunk)
+                return hash_func.hexdigest()
+            else:
+                # Skip other atoms (including 'moov' where metadata often resides)
+                f.seek(size - 8, 1)
+
+    raise ValueError("mdat atom not found in {filename}")
+
 @cli.command()
 def cleanup():
     """
     Clean up computed hashes for deleted files.
     """
     hashes = read_dict()
-    for file_path, h in hashes.items():
-        if not os.path.exists(file_path):
-            print(f"file {file_path} no longer exists")
-            del hashes[h]
-    
+    num = len(hashes)
+    # Filter out file paths that don't exist
+    hashes = {file_path: h for file_path, h in hashes.items() if os.path.exists(file_path)}
+    num -= len(hashes)
+    print(f"Removed {num} hashes as those files no longer exist")
     write_dict(hashes)
 
 if __name__ == "__main__":
